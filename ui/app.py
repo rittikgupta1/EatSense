@@ -4,8 +4,11 @@ from pathlib import Path
 from typing import Dict, Any
 
 import streamlit as st
+from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT_DIR / ".env")
+
 if str(ROOT_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(ROOT_DIR))
 
@@ -33,6 +36,10 @@ if "final" not in st.session_state:
     st.session_state.final = None
 if "clarification" not in st.session_state:
     st.session_state.clarification = None
+if "image_meta" not in st.session_state:
+    st.session_state.image_meta = None
+if "image_data_url" not in st.session_state:
+    st.session_state.image_data_url = None
 
 
 with st.form("input_form"):
@@ -42,23 +49,33 @@ with st.form("input_form"):
 
 if submitted:
     image_meta = None
+    image_data_url = None
     if image_file:
         image_result = safe_open_image(image_file)
         if image_result["ok"]:
             st.image(image_result["image"], caption="Uploaded image", use_column_width=True)
             image_meta = image_result["meta"]
+            image_data_url = image_result.get("data_url")
         else:
             st.error("Invalid image file. Please upload a valid image.")
+    try:
+        interpreter_output = run_interpreter(
+            text_prompt=text_prompt or "",
+            image_meta=image_meta,
+            image_data_url=image_data_url,
+        )
+        clarifier_output = run_clarifier(interpreter_output)
 
-    interpreter_output = run_interpreter(text_prompt=text_prompt or "", image_meta=image_meta)
-    clarifier_output = run_clarifier(interpreter_output)
-
-    st.session_state.trace = {
-        "InterpreterAgent": interpreter_output,
-        "ClarificationGatekeeper": clarifier_output,
-    }
-    st.session_state.clarification = clarifier_output
-    st.session_state.final = None
+        st.session_state.trace = {
+            "InterpreterAgent": interpreter_output,
+            "ClarificationGatekeeper": clarifier_output,
+        }
+        st.session_state.clarification = clarifier_output
+        st.session_state.final = None
+        st.session_state.image_meta = image_meta
+        st.session_state.image_data_url = image_data_url
+    except Exception as exc:
+        st.error(f"Failed to analyze input: {exc}")
 
 clarifier_output = st.session_state.clarification
 
@@ -72,6 +89,16 @@ if clarifier_output and clarifier_output.get("needs_clarification"):
 
     if clarified:
         interpreter_output = st.session_state.trace.get("InterpreterAgent", {})
+        if answers.get("dish_description"):
+            try:
+                interpreter_output = run_interpreter(
+                    text_prompt=answers["dish_description"],
+                    image_meta=st.session_state.image_meta,
+                    image_data_url=st.session_state.image_data_url,
+                )
+                st.session_state.trace["InterpreterAgent"] = interpreter_output
+            except Exception as exc:
+                st.error(f"Failed to re-interpret description: {exc}")
         candidates = interpreter_output.get("candidates", [])
         if answers.get("dish_name"):
             dish_name = answers["dish_name"].strip().title()
@@ -93,41 +120,21 @@ if clarifier_output and clarifier_output.get("needs_clarification"):
             variant = answers["variant"].strip().lower()
 
         top_dish = interpreter_output.get("candidates", [])[0]["dish"]
-
-        ingredient_output = run_ingredients(top_dish, servings, variant)
-        recipe_output = run_recipe(ingredient_output)
-        nutrition_output = run_nutrition(ingredient_output)
-        commerce_output = run_commerce(top_dish)
-
-        st.session_state.trace.update({
-            "InterpreterAgent": interpreter_output,
-            "IngredientAgent": ingredient_output,
-            "RecipeAgent": recipe_output,
-            "NutritionAgent": nutrition_output,
-            "CommerceAgent": commerce_output,
-        })
-
-        st.session_state.final = compose_output(
-            interpreter_output,
-            ingredient_output,
-            recipe_output,
-            nutrition_output,
-            commerce_output,
-        )
-
-else:
-    if st.session_state.trace:
-        interpreter_output = st.session_state.trace.get("InterpreterAgent", {})
-        candidates = interpreter_output.get("candidates", [])
-        if candidates:
-            servings = interpreter_output.get("servings_guess") or 1
-            top_dish = candidates[0]["dish"]
-            ingredient_output = run_ingredients(top_dish, servings, "")
+        try:
+            ingredient_output = run_ingredients(top_dish, servings, variant)
             recipe_output = run_recipe(ingredient_output)
             nutrition_output = run_nutrition(ingredient_output)
             commerce_output = run_commerce(top_dish)
+        except Exception as exc:
+            st.error(f"Failed to generate outputs: {exc}")
+            ingredient_output = None
+            recipe_output = None
+            nutrition_output = None
+            commerce_output = None
 
+        if ingredient_output and recipe_output and nutrition_output:
             st.session_state.trace.update({
+                "InterpreterAgent": interpreter_output,
                 "IngredientAgent": ingredient_output,
                 "RecipeAgent": recipe_output,
                 "NutritionAgent": nutrition_output,
@@ -141,6 +148,36 @@ else:
                 nutrition_output,
                 commerce_output,
             )
+
+else:
+    if st.session_state.trace:
+        interpreter_output = st.session_state.trace.get("InterpreterAgent", {})
+        candidates = interpreter_output.get("candidates", [])
+        if candidates:
+            servings = interpreter_output.get("servings_guess") or 1
+            top_dish = candidates[0]["dish"]
+            try:
+                ingredient_output = run_ingredients(top_dish, servings, "")
+                recipe_output = run_recipe(ingredient_output)
+                nutrition_output = run_nutrition(ingredient_output)
+                commerce_output = run_commerce(top_dish)
+
+                st.session_state.trace.update({
+                    "IngredientAgent": ingredient_output,
+                    "RecipeAgent": recipe_output,
+                    "NutritionAgent": nutrition_output,
+                    "CommerceAgent": commerce_output,
+                })
+
+                st.session_state.final = compose_output(
+                    interpreter_output,
+                    ingredient_output,
+                    recipe_output,
+                    nutrition_output,
+                    commerce_output,
+                )
+            except Exception as exc:
+                st.error(f"Failed to generate outputs: {exc}")
 
 final_output = st.session_state.final
 
