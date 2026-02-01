@@ -22,6 +22,24 @@ EatSense is built to reduce that friction: **snap (or paste) → clarify quickly
 - **Nutrition estimate:** uses the ingredient output only (temp=0 / deterministic-ish) and outputs assumptions.
 - **Optional commerce lookup (small demo):** best-effort Swiggy MCP lookup (non-blocking; falls back gracefully).
 
+
+
+
+## Why Agents (Not a Single Prompt)
+
+EatSense is intentionally **not** implemented as a single “one-shot” prompt.
+
+Key differences:
+
+- The system **pauses and asks clarifying questions** when confidence is low.
+- Ingredients are a **required intermediate artifact**.
+- Both **Nutrition** and **Recipe** are derived **only from the processed ingredient output**, not raw user input.
+- When users answer clarifications (e.g., servings), **only dependent steps are recomputed**.
+- Each agent has a single responsibility and produces **inspectable outputs** via an Agent Trace (useful for debugging/judging).
+This design improves **reliability, and determinism** compared to a monolithic prompt.
+
+
+
 ## Run
 
 ```bash
@@ -67,8 +85,8 @@ flowchart LR
 - Resolves conflicts (example: recipe dish name mismatch vs top dish candidate).
 - Produces an **Agent Trace** (JSON) for judge/debug visibility.
 
-### Data Flow Guarantees (by design)
 
+### Data Flow Guarantees (by design)
 - **RecipeAgent** consumes the ingredient output only.
 - **NutritionAgent** consumes the ingredient output only.
 - Commerce is optional and never blocks core results.
