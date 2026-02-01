@@ -1,4 +1,4 @@
-# EatSense (Codename: Dishwise)
+# EatSense 
 
 EatSense is a multimodal, agentic food-understanding prototype that takes a food image/screenshot or a dish description and produces: dish candidates, a structured ingredient list, a simple recipe, and an estimated calorie + macro breakdown.
 
