@@ -16,6 +16,7 @@ class IngredientOutput(BaseModel):
     dish: str
     servings_assumption: int
     variant: str
+    style: str
     ingredients: List[IngredientItem]
 
 
@@ -23,13 +24,16 @@ SYSTEM_PROMPT = (
     "You are IngredientAgent for Dishwise. Produce a structured ingredient list "
     "for the dish using total quantities for the given servings. "
     "Provide rough quantity ranges like '120-160' with a unit (g/ml/tbsp). "
-    "Include the servings assumption and variant. Keep to 6-12 ingredients."
+    "Include the servings assumption, variant, and style. Keep to 6-12 ingredients. "
+    "If style is restaurant-style, increase portion sizes slightly (~10-15%). "
+    "If home-style, keep standard portions."
     "\n\nReturn JSON with this exact shape:\n"
     "{\n"
     "  \"agent\": \"IngredientAgent\",\n"
     "  \"dish\": \"...\",\n"
     "  \"servings_assumption\": 2,\n"
     "  \"variant\": \"standard|veg|egg|chicken|paneer|...\",\n"
+    "  \"style\": \"home-style|restaurant-style\",\n"
     "  \"ingredients\": [\n"
     "    {\"item\": \"...\", \"quantity_range\": \"120-160\", \"unit\": \"g\"}\n"
     "  ]\n"
@@ -41,11 +45,17 @@ def build_ingredients(
     dish: str,
     servings: int,
     variant: str,
+    style: str,
 ) -> Dict[str, Any]:
     response = call_structured(
         model_cls=IngredientOutput,
         system_prompt=SYSTEM_PROMPT,
-        user_text=f"Dish: {dish}\nServings: {servings}\nVariant: {variant or 'standard'}",
+        user_text=(
+            f"Dish: {dish}\n"
+            f"Servings: {servings}\n"
+            f"Variant: {variant or 'standard'}\n"
+            f"Style: {style or 'home-style'}"
+        ),
         allow_invalid=True,
     )
     data = response.model_dump() if isinstance(response, IngredientOutput) else (response or {})
@@ -53,6 +63,8 @@ def build_ingredients(
         data["servings_assumption"] = servings
     if "variant" not in data:
         data["variant"] = variant or "standard"
+    if "style" not in data:
+        data["style"] = style or "home-style"
     if "dish" not in data:
         data["dish"] = dish
     if "ingredients" not in data and "ingredients_list" in data:

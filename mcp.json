@@ -1,14 +1,5 @@
 {
   "mcpServers": {
-    "swiggy": {
-      "command": "swiggy-mcp",
-      "args": [
-        "--stdio"
-      ],
-      "env": {
-        "SWIGGY_API_KEY": ""
-      }
-    },
     "swiggy-food": {
       "type": "http",
       "url": "https://mcp.swiggy.com/food"

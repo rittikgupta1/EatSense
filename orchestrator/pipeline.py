@@ -16,16 +16,16 @@ def run_interpreter(
     return interpret(text_prompt=text_prompt, image_meta=image_meta, image_data_url=image_data_url)
 
 
-def run_clarifier(interpreter_output: Dict[str, Any]) -> Dict[str, Any]:
-    return decide_questions(interpreter_output)
+def run_clarifier(interpreter_output: Dict[str, Any], preferences: Dict[str, Any]) -> Dict[str, Any]:
+    return decide_questions(interpreter_output, preferences)
 
 
-def run_ingredients(dish: str, servings: int, variant: str) -> Dict[str, Any]:
-    return build_ingredients(dish=dish, servings=servings, variant=variant)
+def run_ingredients(dish: str, servings: int, variant: str, style: str) -> Dict[str, Any]:
+    return build_ingredients(dish=dish, servings=servings, variant=variant, style=style)
 
 
-def run_recipe(ingredient_output: Dict[str, Any]) -> Dict[str, Any]:
-    return build_recipe(ingredient_output=ingredient_output)
+def run_recipe(ingredient_output: Dict[str, Any], style: str) -> Dict[str, Any]:
+    return build_recipe(ingredient_output=ingredient_output, style=style)
 
 
 def run_nutrition(ingredient_output: Dict[str, Any]) -> Dict[str, Any]:

@@ -90,8 +90,19 @@ async def _call_mcp_server(server_name: str, server_config: Dict[str, Any], dish
                             "results": processed_results, 
                             "source": server_name
                         }
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code if e.response else None
+        if status_code == 401:
+            return {
+                "status": "unauthorized",
+                "message": "Swiggy MCP returned 401 Unauthorized. Set SWIGGY_MCP_AUTH_HEADER and SWIGGY_MCP_AUTH_TOKEN.",
+                "source": server_name,
+            }
+        raise
     except Exception as e:
+        import traceback
         print(f"Error calling MCP server {server_name}: {e}")
+        print(traceback.format_exc())
     return None
 
 def commerce_lookup(dish: str) -> Dict[str, Any]:
@@ -105,7 +116,7 @@ def commerce_lookup(dish: str) -> Dict[str, Any]:
 
     config_path = os.getenv("SWIGGY_MCP_CONFIG", "./mcp.json")
     config = _load_mcp_config(config_path)
-    servers = config.get("mcpServers", {})
+    servers = config.get("mcpServers") or config.get("servers") or {}
 
     if not servers:
         return {
@@ -114,11 +125,17 @@ def commerce_lookup(dish: str) -> Dict[str, Any]:
             "message": "No MCP servers configured.",
         }
 
-    # Attempt to call Swiggy-specific servers
-    for name in ["swiggy-food", "swiggy"]:
+    # Attempt to call the configured server first, then fall back to known Swiggy endpoints.
+    preferred = os.getenv("SWIGGY_MCP_SERVER_NAME", "").strip()
+    server_order = []
+    if preferred:
+        server_order.append(preferred)
+    else:
+        server_order.append("swiggy-food")
+
+    for name in server_order:
         if name in servers:
             try:
-                # Use anyio to run the async call in a synchronous context (for Streamlit/Pipeline)
                 mcp_result = anyio.run(_call_mcp_server, name, servers[name], dish)
                 if mcp_result:
                     return {
