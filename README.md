@@ -64,18 +64,67 @@ streamlit run ui/app.py
 The system is implemented as a **multi-agent coordinator** (single process) that routes tasks to specialized agent modules and reconciles outputs.
 
 ```mermaid
-flowchart LR
-  UI[Streamlit UI] --> COORD[Coordinator]
-  COORD --> IA[InterpreterAgent\n(image/text -> dish candidates + cues)]
-  COORD --> CG[ClarificationGatekeeper\n(ask up to 2 questions)]
-  CG -->|if clarification needed| UI
-  UI -->|answers| COORD
-  COORD --> INGA[IngredientAgent\n(structured ingredients + ranges)]
-  COORD --> NA[NutritionAgent\n(macros + calories per serving)]
-  COORD --> RA[RecipeAgent\n(steps + time; style-aware)]
-  COORD --> CA[CommerceAgent (optional)\n(Swiggy MCP best-effort)]
-  COORD --> OUT[Final Composer\n(formatted output + trace)]
-  OUT --> UI
+flowchart TD
+  %% ============ UI Layer ============
+  subgraph UI["UI Layer (Streamlit)"]
+    U1["Inputs\n- Image / Screenshot\n- Text prompt (optional)\n- Preferences (diet, servings, style)"]
+    U2["Clarification UI\n(up to 2 targeted questions)"]
+    U3["Results\n- Dish candidates\n- Ingredients\n- Nutrition\n- Recipe\n- Optional Commerce\n- Agent Trace"]
+  end
+
+  %% ============ Orchestration Layer ============
+  subgraph ORCH["Orchestration Layer"]
+    C["Coordinator\n- control flow + state\n- clarification gate\n- apply answers\n- reconcile outputs\n- trace assembly"]
+    G{"needs_clarification?\n(from ClarificationGatekeeper)"}
+  end
+
+  %% ============ Agents ============
+  subgraph AGENTS["Agent Modules"]
+    IA["InterpreterAgent\n(image/text → top-2 dish candidates + cues)"]
+    Q["ClarificationGatekeeper\n(decide up to 2 questions)\n(no dish-name/servings questions)"]
+    INGA["IngredientAgent\n(ingredients + ranges)\n(style-aware portions)"]
+    NA["NutritionAgent\n(calories + macros per serving)\n(derived only from ingredients)"]
+    RA["RecipeAgent\n(steps + time)\n(derived only from ingredients; style-aware)"]
+    CA["CommerceAgent (optional)\n(Swiggy MCP best-effort)"]
+    OUT["Composer (in Coordinator)\n(final JSON + assumptions)"]
+  end
+
+  %% ============ External ============
+  subgraph EXT["External (Optional)"]
+    MCP["Swiggy MCP HTTP\nhttps://mcp.swiggy.com/food"]
+  end
+
+  %% ============ Flow ============
+  U1 --> C
+  C --> IA
+  IA --> Q
+  Q --> G
+
+  %% Clarification gate blocks downstream agents until answered
+  G -- Yes --> U2
+  U2 --> C
+
+  %% Continue pipeline after clarification or if not needed
+  G -- No --> INGA
+  C --> INGA
+
+  %% Causal dependency: Ingredients -> Nutrition + Recipe
+  INGA --> NA
+  INGA --> RA
+
+  %% Optional commerce (non-blocking)
+  C -. optional .-> CA
+  CA -. tool calls .-> MCP
+  MCP -. results .-> CA
+
+  %% Compose final result + trace
+  IA --> OUT
+  Q --> OUT
+  INGA --> OUT
+  NA --> OUT
+  RA --> OUT
+  CA --> OUT
+  OUT --> U3
 ```
 
 ### Coordinator Responsibilities
