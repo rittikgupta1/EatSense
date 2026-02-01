@@ -15,15 +15,7 @@ load_dotenv(ROOT_DIR / ".env")
 if str(ROOT_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(ROOT_DIR))
 
-from orchestrator.pipeline import (
-    run_interpreter,
-    run_clarifier,
-    run_ingredients,
-    run_recipe,
-    run_nutrition,
-    run_commerce,
-    compose_output,
-)
+from orchestrator.coordinator import Coordinator, CoordinatorState
 from utils.io import safe_open_image
 
 
@@ -147,30 +139,24 @@ def render_stepper(stage: int) -> None:
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
-def build_outputs(interpreter_output: Dict[str, Any], servings: int, variant: str, style: str) -> None:
-    top_dish = interpreter_output.get("candidates", [])[0]["dish"]
-
-    ingredient_output = run_ingredients(top_dish, servings, variant, style)
-    recipe_output = run_recipe(ingredient_output, style)
-    nutrition_output = run_nutrition(ingredient_output)
-    commerce_output = run_commerce(top_dish)
-
-    st.session_state.trace.update(
-        {
-            "IngredientAgent": ingredient_output,
-            "RecipeAgent": recipe_output,
-            "NutritionAgent": nutrition_output,
-            "CommerceAgent": commerce_output,
-        }
+def _make_coordinator(
+    text_prompt: str,
+    image_meta: Optional[Dict[str, Any]],
+    image_data_url: Optional[str],
+    clarifications: Optional[Dict[str, Any]] = None,
+) -> Coordinator:
+    state = CoordinatorState(
+        text_prompt=text_prompt or "",
+        image_meta=image_meta,
+        image_data_url=image_data_url,
+        preferences={
+            "diet": st.session_state.diet,
+            "servings": st.session_state.servings,
+            "style": st.session_state.style,
+        },
+        clarifications=clarifications or {},
     )
-
-    st.session_state.final = compose_output(
-        interpreter_output,
-        ingredient_output,
-        recipe_output,
-        nutrition_output,
-        commerce_output,
-    )
+    return Coordinator(state)
 
 
 # -----------------------------
@@ -253,20 +239,11 @@ if submitted:
             st.warning("Paste a valid data URL starting with data:image...")
 
     try:
-        interpreter_output = run_interpreter(
-            text_prompt=text_prompt or "",
-            image_meta=image_meta,
-            image_data_url=image_data_url,
-        )
-        clarifier_output = run_clarifier(
-            interpreter_output,
-            {"diet": st.session_state.diet, "style": st.session_state.style, "servings": st.session_state.servings},
-        )
+        coordinator = _make_coordinator(text_prompt, image_meta, image_data_url)
+        interpreter_output = coordinator.run_interpreter()
+        clarifier_output = coordinator.run_clarifier(interpreter_output)
 
-        st.session_state.trace = {
-            "InterpreterAgent": interpreter_output,
-            "ClarificationGatekeeper": clarifier_output,
-        }
+        st.session_state.trace = coordinator.state.trace
         st.session_state.clarification = clarifier_output
         st.session_state.final = None
         st.session_state.image_meta = image_meta
@@ -322,61 +299,19 @@ if has_questions:
                 answers[qid] = st.text_input(qtext)
 
         if st.button("Continue", type="primary"):
-            interpreter_output = st.session_state.trace.get("InterpreterAgent", {})
-
-            if answers.get("dish_description"):
-                try:
-                    interpreter_output = run_interpreter(
-                        text_prompt=answers["dish_description"],
-                        image_meta=st.session_state.image_meta,
-                        image_data_url=st.session_state.image_data_url,
-                    )
-                except Exception as exc:
-                    st.error(f"Failed to re-interpret description: {exc}")
-                    return
-
-            candidates = interpreter_output.get("candidates", [])
-            if answers.get("dish_name"):
-                dish_name = answers["dish_name"].strip().title()
-                candidates = [
-                    {"dish": dish_name, "confidence": 0.95, "cues": ["user_provided"]},
-                    {
-                        "dish": candidates[0]["dish"] if candidates else "Mixed Dish",
-                        "confidence": 0.35,
-                        "cues": ["fallback"],
-                    },
-                ]
-                interpreter_output["candidates"] = candidates
-            if answers.get("dish_choice"):
-                dish_name = answers["dish_choice"].strip().title()
-                candidates = [
-                    {"dish": dish_name, "confidence": 0.95, "cues": ["user_selected"]},
-                    {"dish": candidates[0]["dish"] if candidates else "Mixed Dish", "confidence": 0.35, "cues": ["fallback"]},
-                ]
-                interpreter_output["candidates"] = candidates
-
-            servings = st.session_state.servings
-            if answers.get("servings"):
-                try:
-                    servings = max(1, int(answers["servings"]))
-                except ValueError:
-                    servings = st.session_state.servings
-            else:
-                servings = interpreter_output.get("servings_guess") or servings or 1
-
-            variant = (answers.get("variant") or st.session_state.diet).strip().lower()
-            if answers.get("diet_conflict"):
-                choice = answers["diet_conflict"]
-                if choice == "switch to egg":
-                    variant = "egg"
-                elif choice == "switch to chicken":
-                    variant = "chicken"
-                else:
-                    variant = "veg"
-
             try:
-                st.session_state.trace["InterpreterAgent"] = interpreter_output
-                build_outputs(interpreter_output, servings, variant, st.session_state.style)
+                coordinator = _make_coordinator(
+                    text_prompt,
+                    st.session_state.image_meta,
+                    st.session_state.image_data_url,
+                    clarifications=answers,
+                )
+                interpreter_output = coordinator.apply_clarifications(
+                    st.session_state.trace.get("InterpreterAgent", {})
+                )
+                final_output = coordinator.build_outputs(interpreter_output)
+                st.session_state.trace = coordinator.state.trace
+                st.session_state.final = final_output
                 st.session_state.clarification = None
             except Exception as exc:
                 st.error(f"Failed to generate outputs: {exc}")
@@ -400,33 +335,15 @@ if (not has_questions) and st.session_state.trace and (not st.session_state.fina
     interpreter_output = st.session_state.trace.get("InterpreterAgent", {})
     candidates = interpreter_output.get("candidates", [])
     if candidates:
-        # Servings priority: preferences bar -> interpreter guess -> 1
-        servings = st.session_state.servings or (interpreter_output.get("servings_guess") or 1)
-        top_dish = candidates[0]["dish"]
         try:
-            # Variant from preference bar
-            variant = st.session_state.diet.lower()
-            ingredient_output = run_ingredients(top_dish, servings, variant, st.session_state.style)
-            recipe_output = run_recipe(ingredient_output, st.session_state.style)
-            nutrition_output = run_nutrition(ingredient_output)
-            commerce_output = run_commerce(top_dish)
-
-            st.session_state.trace.update(
-                {
-                    "IngredientAgent": ingredient_output,
-                    "RecipeAgent": recipe_output,
-                    "NutritionAgent": nutrition_output,
-                    "CommerceAgent": commerce_output,
-                }
+            coordinator = _make_coordinator(
+                text_prompt,
+                st.session_state.image_meta,
+                st.session_state.image_data_url,
             )
-
-            st.session_state.final = compose_output(
-                interpreter_output,
-                ingredient_output,
-                recipe_output,
-                nutrition_output,
-                commerce_output,
-            )
+            final_output = coordinator.build_outputs(interpreter_output)
+            st.session_state.trace = coordinator.state.trace
+            st.session_state.final = final_output
         except Exception as exc:
             st.error(f"Failed to generate outputs: {exc}")
 
